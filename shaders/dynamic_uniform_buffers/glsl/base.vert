@@ -1,4 +1,7 @@
 #version 450
+
+#extension GL_EXT_nonuniform_qualifier : require
+
 /* Copyright (c) 2019-2024, Sascha Willems
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -25,9 +28,9 @@ layout (binding = 0) uniform UboView
 	mat4 view;
 } uboView;
 
-layout (binding = 1) uniform UboInstance 
+layout (binding = 1) buffer UboInstance 
 {
-	mat4 model; 
+	mat4 model[];
 } uboInstance;
 
 layout (location = 0) out vec3 outColor;
@@ -39,9 +42,9 @@ out gl_PerVertex
 
 void main() 
 {
-	outColor = inColor;
+	outColor = inColor - gl_InstanceIndex * 0.01;
 	// To avoid calculating this for every vertex, matrix multiplications could be moved to the CPU-side
-	mat4 modelView = uboView.view * uboInstance.model;
+	mat4 modelView = uboView.view * uboInstance.model[gl_InstanceIndex];
 	vec3 worldPos = vec3(modelView * vec4(inPos, 1.0));
 	gl_Position = uboView.projection * modelView * vec4(inPos.xyz, 1.0);
 }

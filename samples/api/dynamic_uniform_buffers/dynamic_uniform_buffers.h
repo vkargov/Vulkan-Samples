@@ -53,6 +53,7 @@ class DynamicUniformBuffers : public ApiVulkanSample
 	{
 		std::unique_ptr<vkb::core::Buffer> view;
 		std::unique_ptr<vkb::core::Buffer> dynamic;
+		std::unique_ptr<vkb::core::Buffer> command_indices;
 	} uniform_buffers;
 
 	struct UboVS
@@ -96,6 +97,7 @@ class DynamicUniformBuffers : public ApiVulkanSample
 	bool         prepare(const vkb::ApplicationOptions &options) override;
 	virtual void render(float delta_time) override;
 	virtual bool resize(const uint32_t width, const uint32_t height) override;
+	void         request_gpu_features(vkb::PhysicalDevice &gpu) override;
 };
 
 std::unique_ptr<vkb::Application> create_dynamic_uniform_buffers();

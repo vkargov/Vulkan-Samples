@@ -22,7 +22,7 @@
  * with respect to the alignment reported by the device via minUniformBufferOffsetAlignment that
  * contains all matrices for the objects in the scene.
  *
- * The used descriptor type VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC then allows to set a dynamic
+ * The used descriptor type VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC_DYNAMIC then allows to set a dynamic
  * offset used to pass data from the single uniform buffer to the connected shader binding point.
  */
 
@@ -33,6 +33,8 @@
 DynamicUniformBuffers::DynamicUniformBuffers()
 {
 	title = "Dynamic uniform buffers";
+
+	add_device_extension(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
 }
 
 DynamicUniformBuffers ::~DynamicUniformBuffers()
@@ -116,6 +118,12 @@ void DynamicUniformBuffers::build_command_buffers()
 		vkCmdBindVertexBuffers(draw_cmd_buffers[i], 0, 1, vertex_buffer->get(), offsets);
 		vkCmdBindIndexBuffer(draw_cmd_buffers[i], index_buffer->get_handle(), 0, VK_INDEX_TYPE_UINT32);
 
+#define FASTER
+#ifdef FASTER
+		uint32_t zeros[] = {0, 0};
+		vkCmdBindDescriptorSets(draw_cmd_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_set, sizeof(zeros) / sizeof(uint32_t), zeros);
+		vkCmdDrawIndexed(draw_cmd_buffers[i], index_count, OBJECT_INSTANCES, 0, 0, 0);
+#else
 		// Render multiple objects using different model matrices by dynamically offsetting into one uniform buffer
 		for (uint32_t j = 0; j < OBJECT_INSTANCES; j++)
 		{
@@ -126,6 +134,7 @@ void DynamicUniformBuffers::build_command_buffers()
 
 			vkCmdDrawIndexed(draw_cmd_buffers[i], index_count, 1, 0, 0, 0);
 		}
+#endif
 
 		draw_ui(draw_cmd_buffers[i]);
 
@@ -228,8 +237,8 @@ void DynamicUniformBuffers::setup_descriptor_pool()
 	// Example uses one ubo and one image sampler
 	std::vector<VkDescriptorPoolSize> pool_sizes =
 	    {
-	        vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
 	        vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1),
+	        vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1),
 	        vkb::initializers::descriptor_pool_size(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1)};
 
 	VkDescriptorPoolCreateInfo descriptor_pool_create_info =
@@ -245,8 +254,8 @@ void DynamicUniformBuffers::setup_descriptor_set_layout()
 {
 	std::vector<VkDescriptorSetLayoutBinding> set_layout_bindings =
 	    {
-	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
-	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, 1),
+	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, 0),
+	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, 1),
 	        vkb::initializers::descriptor_set_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2)};
 
 	VkDescriptorSetLayoutCreateInfo descriptor_layout =
@@ -281,9 +290,9 @@ void DynamicUniformBuffers::setup_descriptor_set()
 
 	std::vector<VkWriteDescriptorSet> write_descriptor_sets = {
 	    // Binding 0 : Projection/View matrix uniform buffer
-	    vkb::initializers::write_descriptor_set(descriptor_set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &view_buffer_descriptor),
+	    vkb::initializers::write_descriptor_set(descriptor_set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 0, &view_buffer_descriptor),
 	    // Binding 1 : Instance matrix as dynamic uniform buffer
-	    vkb::initializers::write_descriptor_set(descriptor_set, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, &dynamic_buffer_descriptor),
+	    vkb::initializers::write_descriptor_set(descriptor_set, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, &dynamic_buffer_descriptor),
 	};
 
 	vkUpdateDescriptorSets(get_device().get_handle(), static_cast<uint32_t>(write_descriptor_sets.size()), write_descriptor_sets.data(), 0, NULL);
@@ -410,8 +419,13 @@ void DynamicUniformBuffers::prepare_uniform_buffers()
 
 	uniform_buffers.dynamic = std::make_unique<vkb::core::Buffer>(get_device(),
 	                                                              buffer_size,
-	                                                              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+	                                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 	                                                              VMA_MEMORY_USAGE_CPU_TO_GPU);
+	// uniform_buffers.command_indices = std::make_unique<vkb::core::Buffer>(get_device(),
+	//                                                               sizeof(VkDrawIndexedIndirectCommand),
+	//                                                               //VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+	// 															  VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+	//                                                               VMA_MEMORY_USAGE_CPU_TO_GPU);
 
 	// Prepare per-object matrices with offsets and random rotations
 	std::default_random_engine      rnd_engine(lock_simulation_speed ? 0 : static_cast<unsigned>(time(nullptr)));
@@ -421,6 +435,13 @@ void DynamicUniformBuffers::prepare_uniform_buffers()
 		rotations[i]       = glm::vec3(rnd_dist(rnd_engine), rnd_dist(rnd_engine), rnd_dist(rnd_engine)) * 2.0f * glm::pi<float>();
 		rotation_speeds[i] = glm::vec3(rnd_dist(rnd_engine), rnd_dist(rnd_engine), rnd_dist(rnd_engine));
 	}
+	// VkDrawIndexedIndirectCommand draw_pls {
+	// 	.indexCount = index_count,
+	// 	.instanceCount = OBJECT_INSTANCES,
+	// 	.firstIndex = 0,
+	// 	.firstInstance = 0,
+	// };
+	// uniform_buffers.command_indices->update(&draw_pls, sizeof draw_pls, 0);
 
 	update_uniform_buffers();
 	update_dynamic_uniform_buffer(0.0f, true);
@@ -448,6 +469,7 @@ void DynamicUniformBuffers::update_dynamic_uniform_buffer(float delta_time, bool
 	auto      dim  = static_cast<uint32_t>(pow(OBJECT_INSTANCES, (1.0f / 3.0f)));
 	auto      fdim = static_cast<float>(dim);
 	glm::vec3 offset(5.0f);
+	const auto elts = dim * dim * dim;
 
 	for (uint32_t x = 0; x < dim; x++)
 	{
@@ -458,7 +480,15 @@ void DynamicUniformBuffers::update_dynamic_uniform_buffer(float delta_time, bool
 			for (uint32_t z = 0; z < dim; z++)
 			{
 				auto fz    = static_cast<float>(z);
-				auto index = x * dim * dim + y * dim + z;
+
+				// VVK: Experimenting with render ordering. Trying to see if rendering front to back would help with FPS.	
+				// Doesn't look like it does. Maybe a little. idk. Need to quantify with RGP.
+				// Upd: NEVER MIND. This sample is CPU bound.
+				// Upd2: Interestingly enough, the biggest hitter is an SRSO vulnerability mitigation code.
+				// (see doc in Linux's kernel and AMD's "TECHNICAL UPDATE REGARDING SPECULATIVE RETURN STACK OVERFLOW" pdf)
+				// G: Who's responsible for culling in Vulkan?
+				auto index = elts - 1 - x - y * dim - z * dim * dim;
+				//auto index = x * dim * dim + y * dim + z;
 
 				// Aligned offset
 				auto model_mat = (glm::mat4 *) (((uint64_t) ubo_data_dynamic.model + (index * dynamic_alignment)));
@@ -538,4 +568,9 @@ void DynamicUniformBuffers::render(float delta_time)
 std::unique_ptr<vkb::Application> create_dynamic_uniform_buffers()
 {
 	return std::make_unique<DynamicUniformBuffers>();
+}
+
+void DynamicUniformBuffers::request_gpu_features(vkb::PhysicalDevice &gpu)
+{
+	auto &vulkan12_features = gpu.request_extension_features<VkPhysicalDeviceVulkan12Features>(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES);
 }
